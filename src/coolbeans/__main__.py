@@ -1,17 +1,23 @@
-import os
-import sys
-import re
 import subprocess
-import shutil
+import sys
 import typer
 from typing import Annotated, List
+import datetime
+import os
 
-import coolbeans.utils.locations as locations
 from coolbeans.defaults import defaulttheme
+from coolbeans.utils.locations import screenshots_cache_dir, screenshots_dir
+from coolbeans.cmds.theme_switch import (
+    themes_list,
+    rofi_theme_switcher,
+    swap_theme_syms,
+)
 
 cli = typer.Typer(pretty_exceptions_enable=False)
 theme = typer.Typer(pretty_exceptions_enable=False)
+capture = typer.Typer(pretty_exceptions_enable=False)
 cli.add_typer(theme)
+cli.add_typer(capture)
 
 
 @theme.command("theme_switcher")
@@ -25,9 +31,11 @@ def theme_switcher(
     if rofi:
         rofi_theme_switcher(dalist)
         sys.exit(0)
+
     if list_themes:
         print(*dalist, sep="\n")
         sys.exit(0)
+
     if sel_theme not in dalist:
         print("umm this one aint here boss o_O")
         sys.exit(1)
@@ -35,56 +43,59 @@ def theme_switcher(
     swap_theme_syms(sel_theme)
 
 
-def rofi_theme_switcher(da_list: List[str]):
-    tlist = subprocess.Popen(
-        ["echo", "\n".join(t for t in da_list)], stdout=subprocess.PIPE, text=True
-    )
-    result = subprocess.check_output(
-        ["rofi", "-dmenu", "-sep", "\n", "-i", "-p", "Themes", "-disable-history"],
-        stdin=tlist.stdout,
-        text=True,
-    ).strip()
+@capture.command("screenshot")
+def screenshot(
+    region: Annotated[bool, typer.Option("--region", "-r")] = False,
+    freeze: Annotated[bool, typer.Option("--freeze", "-f")] = False,
+    save: Annotated[bool, typer.Option("--save", "-s")] = False,
+    edit: Annotated[bool, typer.Option("--edit", "-e")] = False,
+):
+    cap_reg: bytes | None = None
 
-    swap_theme_syms(result)
+    if freeze:
+        subprocess.run(["hyprpicker", "-rz"])
 
+    if region:
+        cap_reg = subprocess.check_output(["slurp"])
 
-def swap_theme_syms(sel_theme: str):
-    current_theme_dir = locations.currents_dir / "theme"
+    if cap_reg is None:
+        # this gets both screens
+        sc_data = subprocess.check_output(["grim", "-"])
+    else:
+        sc_data = subprocess.check_output(["grim", "-g", cap_reg.strip(), "-"])
 
-    # Remove existing symlink or directory
-    if current_theme_dir.is_symlink() or current_theme_dir.exists():
-        if current_theme_dir.is_dir() and not current_theme_dir.is_symlink():
-            shutil.rmtree(current_theme_dir)
-        else:
-            current_theme_dir.unlink()
-    # Create new symlink: current/theme -> /path/to/theme-name
-    current_theme_dir.symlink_to(
-        locations.themes_dir / ugly(sel_theme), target_is_directory=True
-    )
+    subprocess.run(["wl-copy"], input=sc_data)
 
+    if edit:
+        swappy = subprocess.Popen(
+            ["swappy", "-f", "-"], stdin=subprocess.PIPE, start_new_session=True
+        )
+        assert swappy.stdin is not None, sys.exit(1)
+        swappy.stdin.write(sc_data)
+        swappy.stdin.close()
 
-def themes_list() -> List[str]:
-    themes = [pretty(theme) for theme in os.listdir(locations.themes_dir)]
-    return themes
+    dest = screenshots_cache_dir / datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    screenshots_cache_dir.mkdir(exist_ok=True, parents=True)
+    dest.write_bytes(sc_data)
 
+    if save:
+        save_dest = (
+            screenshots_dir / datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        ).with_suffix(".png")
+        save_dest.parent.mkdir(exist_ok=True, parents=True)
+        save_dest.write_bytes(sc_data)
+        os.remove(dest)
 
-def pretty(text) -> str:
-    # replace hyphens with spaces, capitalize first letter of each word
-    text = re.sub(r"(^|-)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
-    text = re.sub(r"-", " ", text)
-    return text
-
-
-# I wish I had good rofi bindings
-def ugly(text):
-    text = re.sub(r" ", "-", text)
-    text = re.sub(r"([a-z])([A-Z])", r"\1-\2", text)
-    text = text.lower()
-    return text
+    # if fullscreen then capture and send to wlcopy and save to cache
+    # get user input for next part
+    # open it in swappy, or save to somewhere
+    # cs has a custom notification thing, they send a message through dbus to it and get the user response
+    # For now all of those functions are explicit
 
 
 if __name__ == "__main__":
     cli()
+
 # @cli.command()
 # def clipboard(): ...
 #
@@ -99,8 +110,3 @@ if __name__ == "__main__":
 #
 # @cli.command()
 # def screen_record(): ...
-#
-#
-# @cli.command()
-# def main():
-#    print("hello")
